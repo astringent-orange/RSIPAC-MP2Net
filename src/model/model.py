@@ -589,6 +589,8 @@ class MP2Net(torch.nn.Module):
         final_seq, final_hm = self.deconv_gru(p0_seq)
         # ------------------up end------------------
         ret = {}
+        ret['hm_seq'] = mask_out  # 掩码序列 (B, N, 1, H, W)
+        
         for head in self.heads:
             if 'dis' in head:
                 # 针对'dis'头，处理final_seq的每一帧，输出 (B, N-1, ...)
@@ -596,11 +598,10 @@ class MP2Net(torch.nn.Module):
                 for i in range(1, N - 1):
                     x = self.__getattr__(head)(final_seq[:, i]).unsqueeze(1)
                     trk_out = torch.cat((trk_out, x), dim=1)
-                ret_temp[head] = trk_out
+                ret[head] = trk_out
             else:
                 # 其他头直接处理final_hm，输出 (B, N-1, ...)
-                ret_temp[head] = self.__getattr__(head)(final_hm)
-        ret[1] = ret_temp
+                ret[head] = self.__getattr__(head)(final_hm)
 
         # 9. 返回特征图格式结果
         # temp_feat: N帧的多尺度特征列表，每帧4个特征

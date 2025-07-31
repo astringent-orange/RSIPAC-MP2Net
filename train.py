@@ -6,7 +6,7 @@ from torch.utils.data import Dataloader
 
 from src.data_process.dataset import RSIPACDatset
 from src.engine.trainer import Trainer
-from src.loss.loss import Loss
+from src.loss.mp2loss import MP2Loss
 from src.models.model import MP2Net
 from src.opts import Opts
 from src.utils.tools import print_banner
@@ -69,7 +69,7 @@ def train(opt):
     print(f"Create optimizer: {optimizer.__class__.__name__}")
 
     # 损失函数
-    loss = Loss(opt)
+    loss = MP2Loss(opt)
     print(f"Create loss function: {loss.__class__.__name__}")
 
     # 训练器
@@ -93,7 +93,7 @@ def train(opt):
         trainer.train(train_loader, epoch, logger)              # 训练
 
         if (epoch + 1) % opt.val_interval == 0:
-            trainer.val(val_loader, epoch, logger, best)        # 验证
+            best = trainer.val(val_loader, epoch, logger, best)  # 验证
 
 
     # ********************** 结束训练 **********************

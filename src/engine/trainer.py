@@ -47,6 +47,9 @@ class Trainer(object):
         self.model_with_loss.train()
         num_iters = len(train_loader)
         start_time = time.time()
+        loss_list = ['loss', 'hm_loss', 'wh_loss', 'off_loss', 'track_loss', 'seq_loss']
+        avg_loss_stats = {l: AverageMeter() for l in self.loss_stats}
+
         bar = Bar(f'Epoch {epoch + 1, self.opt.num_epochs }', max=num_iters, fill='▇',
                 suffix='%(percent)3d%% | ETA: %(etamsg)7s | loss: %(loss)8.4f | hm: %(hm)8.4f | wh: %(wh)8.4f | off: %(off)8.4f | track: %(track)8.4f | seq: %(seq)8.4f')
 
@@ -69,6 +72,7 @@ class Trainer(object):
                 loss.backward()
                 self.optimizer.step()
 
+            # 更新进度条
             bar.loss = float(loss.mean().cpu().detach().numpy())
             bar.hm = float(loss_stats['hm_loss'].mean().cpu().detach().numpy())
             bar.wh = float(loss_stats['wh_loss'].mean().cpu().detach().numpy())
@@ -82,11 +86,16 @@ class Trainer(object):
             bar.etamsg = f'{eta_min}m{eta_sec}s'
             bar.next()
 
+            for l in avg_loss_stats:
+                avg_loss_stats[l].update(
+                    loss_stats[l].mean().item(), images.size(0))
+            del output, loss, loss_stats
+
         bar.finish()
 
         # 记录日志
         logger.write(f"epoch: {} |")  
-        for key, value in loss_stats.items():
+        for key, value in avg_loss_stats.items():
             logger.write(f"{key}: {value.mean().item():.4f} | ")
         logger.write('\n')
 
@@ -118,11 +127,15 @@ class Trainer(object):
         start_time = time.time()
         torch.cuda.empty_cache()
 
+        metrics_list = ['mota', 'motp', 'idf1', 'idp', 'idr', 'num_switches', 'num_false_positives', 'num_misses']
+        avg_metrics_stats = {m: AverageMeter() for m in metrics_list}
+
         # 如果使用多GPU，获取module
         if len(self.opt.gpus) > 1:
             model_with_loss = self.model_with_loss.module
 
-        bar = 
+        bar = Bar(f'(val)Epoch {epoch + 1, self.opt.num_epochs }', max=num_iters, fill='▇',
+                suffix='%(percent)3d%% | ETA: %(etamsg)7s | mota: %(mota)8.4f | motp: %(motp)8.4f | idf1: %(idf1)8.4f | idp: %(idp)8.4f | idr: %(idr)8.4f | switches: %(switches)8.4f | false_positives: %(false_positives)8.4f | misses: %(misses)8.4f')
 
         for iter_id, (images, targets) in enumerate(val_loader):
             if iter_id > num_iters:
@@ -131,6 +144,53 @@ class Trainer(object):
             with torch.no_grad():
                 outputs = self.model_with_loss(images, targets, mode='val')
 
+            outputs = postprocess(outputs)
+            metrics_stats = evaluator(outputs, targets)
+
+            # 更新进度条
+            bar.mota = float(metrics_stats['mota'].mean().item())
+            bar.motp = float(metrics_stats['motp'].mean().item())
+            bar.idf1 = float(metrics_stats['idf1'].mean().item())
+            bar.idp = float(metrics_stats['idp'].mean().item()) 
+            bar.idr = float(metrics_stats['idr'].mean().item())
+            bar.switches = float(metrics_stats['num_switches'].mean().item())
+            bar.false_positives = float(metrics_stats['num_false_positives'].mean().item())
+            bar.misses = float(metrics_stats['num_misses'].mean().item())
+            # ETA美化为分+秒
+            eta = bar.eta
+            eta_min = int(eta // 60)
+            eta_sec = int(eta % 60)
+            bar.etamsg = f'{eta_min}m{eta_sec}s'    
             bar.next()
 
+            for m in avg_loss_stats:
+                avg_metrics_stats[m].update(
+                    metrics_stats[m].mean().item(), images.size(0))
+            del outputs, metrics_stats
+
         bar.finish()
+
+        # 记录日志
+        logger.write(f"(val)epoch: {epoch + 1} |")
+        for key, value in avg_metrics_stats.items():
+            logger.write(f"{key}: {value.mean().item():.4f} | ")
+        logger.write('\n')
+
+        # 统计epoch耗时
+        elapsed_time = time.time() - start_time
+        epoch_min = int(elapsed_time // 60)
+        epoch_sec = int(elapsed_time % 60)
+        print(f"(val)Epoch {epoch + 1}/{self.opt.num_epochs} time: {epoch_min}m{epoch_sec}s.")
+        logger.write(f"(val)Epoch {epoch + 1}/{self.opt.num_epochs} time: {epoch_min}m{epoch_sec}s.\n") 
+
+        # 保存最佳模型
+        if avg_metrics_stats['idp'].mean().item() > best:
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': self.model_with_loss.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'best': avg_metrics_stats['idp'].mean().item()
+            }, os.path.join(self.opt.save_dir, 'model_best.pth'))
+            best = avg_metrics_stats['idp'].mean().item()
+
+        return best
